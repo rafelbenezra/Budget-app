@@ -218,7 +218,7 @@ body{
   <div class="stat-pill"><div class="stat-lbl">Pagado</div><div class="stat-val" id="s-paid" style="color:var(--red)">$0</div></div>
   <div class="stat-pill"><div class="stat-lbl">Extras</div><div class="stat-val" id="s-extra" style="color:var(--orange)">$0</div></div>
   <div class="stat-pill"><div class="stat-lbl">Buffer</div><div class="stat-val" id="s-buf" style="color:var(--purple)">$250</div></div>
-  <div class="stat-pill"><div class="stat-lbl">Carry →</div><div class="stat-val" id="s-carry" style="color:var(--teal)">$0</div></div>
+  <div class="stat-pill"><div class="stat-lbl">Sobrante →</div><div class="stat-val" id="s-carry" style="color:var(--teal)">$0</div></div>
 </div>
 
 <div id="alert-def" class="alert alert-red"></div>
@@ -256,6 +256,7 @@ body{
   <button class="nav-btn nav-main" onclick="close_period()">Cerrar + $250 buffer</button>
   <button class="nav-btn" id="btn-next" onclick="shift(1)">Siguiente →</button>
 </div>
+<div style="text-align:center;margin:-8px 16px 20px"><button onclick="resetAll()" style="background:none;border:none;color:var(--label3);font-size:12px;cursor:pointer;font-family:-apple-system,system-ui,sans-serif;padding:4px 8px;">↺ Reiniciar datos</button></div>
 
 <!-- EXTRAS -->
 <div class="sec-hd"><span class="sec-title">Gastos Extras</span></div>
@@ -378,8 +379,15 @@ const OVERDUE_EVENTS = [
   {date:"2026-05-27",name:"Expedia Málaga",  amt:99.31,   platform:"Affirm",      note:"Autopay procesado",         urgent:false},
 ];
 
-let S={pidx:0,paid:{},extras:[],buf:BUF,carry:0,ovPaid:{}};
+const DEFAULT_S={pidx:0,paid:{},extras:[],buf:BUF,carry:0,ovPaid:{}};
+let S=JSON.parse(JSON.stringify(DEFAULT_S));
 try{const s=localStorage.getItem("rbv4");if(s)S=JSON.parse(s);}catch(e){}
+function resetAll(){
+  if(!confirm("¿Reiniciar todos los datos? Esto no se puede deshacer."))return;
+  S=JSON.parse(JSON.stringify(DEFAULT_S));
+  localStorage.removeItem("rbv4");
+  save();render();window.scrollTo({top:0,behavior:"smooth"});
+}
 function save(){try{localStorage.setItem("rbv4",JSON.stringify(S));}catch(e){}}
 function P(){return PERIODS[S.pidx]||PERIODS[0];}
 
@@ -407,7 +415,7 @@ function render(){
 
   const surplus=Math.max(0,balance-BUF);
   const ac=document.getElementById("alert-carry");
-  if((S.carry||0)>0){ac.style.display="block";ac.textContent=`💰 Carry-over de quincena anterior: +${fmt(S.carry)} sumado al balance`;}
+  if((S.carry||0)>0){ac.style.display="block";ac.textContent=`💰 Sobrante anterior: +${fmt(S.carry)} sumado a esta quincena (balance real: ${fmt(SALARY+(S.carry||0))})`;}
   else ac.style.display="none";
   const av=document.getElementById("alert-av");
   if(surplus>100&&p.avTarget){av.style.display="block";av.textContent=`🏔 Avalanche disponible: ${fmt(surplus)} → ${p.avTarget.name} (${p.avTarget.apr}% APR · paga ${fmt(p.avTarget.amt + surplus)} esta quincena)`;}
@@ -640,11 +648,14 @@ function togglePaid(j){const k=`${S.pidx}-${j}`;S.paid[k]=!S.paid[k];save();rend
 function shift(d){const n=S.pidx+d;if(n>=0&&n<PERIODS.length){S.pidx=n;save();render();window.scrollTo({top:0,behavior:"smooth"});}}
 function close_period(){
   const p=P();
-  const paidAmt=p.evs.reduce((s,e,j)=>s+(S.paid[`${S.pidx}-${j}`]?e.amt:0),0);
+  // Use TOTAL period obligations (not just marked-paid) — all bills settled when closing
   const extraAmt=S.extras.reduce((s,e)=>s+e.amt,0);
-  const remaining=SALARY+(S.carry||0)-paidAmt-extraAmt;
-  S.carry=Math.max(0,remaining-BUF);  // carry forward surplus after buffer
+  const totalOut=p.total+extraAmt;
+  const remaining=(SALARY+(S.carry||0))-totalOut;
+  S.carry=Math.max(0,remaining-BUF);  // surplus after buffer carries forward
   S.buf+=BUF;
+  // Mark all as paid when closing
+  p.evs.forEach((_,j)=>{ S.paid[`${S.pidx}-${j}`]=true; });
   S.extras=[];
   if(S.pidx<PERIODS.length-1)S.pidx++;
   save();render();window.scrollTo({top:0,behavior:"smooth"});
