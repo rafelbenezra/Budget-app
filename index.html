@@ -193,7 +193,84 @@ body{
 .alloc-row:last-child{border-bottom:none}
 .card{background:#fff;border:1px solid var(--sep);border-radius:var(--r);overflow:hidden;margin:0 16px 14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
 .card-inner{padding:14px 16px}
+
+/* ─ CHAT ─ */
+#chat-fab{
+  position:fixed;bottom:24px;right:20px;z-index:200;
+  width:54px;height:54px;border-radius:50%;
+  background:var(--label);color:#fff;
+  border:none;cursor:pointer;font-size:22px;
+  box-shadow:0 4px 16px rgba(0,0,0,.18);
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .15s;
+}
+#chat-fab:active{transform:scale(.93)}
+#chat-panel{
+  position:fixed;bottom:0;left:0;right:0;z-index:300;
+  background:#fff;border-radius:22px 22px 0 0;
+  box-shadow:0 -4px 30px rgba(0,0,0,.12);
+  display:flex;flex-direction:column;
+  max-height:82vh;
+  transform:translateY(100%);
+  transition:transform .3s cubic-bezier(.4,0,.2,1);
+}
+#chat-panel.open{transform:translateY(0)}
+#chat-drag{
+  width:36px;height:4px;border-radius:2px;
+  background:var(--bg4);margin:10px auto 6px;flex-shrink:0;
+}
+#chat-head{
+  padding:0 16px 10px;display:flex;
+  justify-content:space-between;align-items:center;flex-shrink:0;
+  border-bottom:1px solid var(--sep);
+}
+#chat-title{font-size:15px;font-weight:700;color:var(--label)}
+#chat-close{
+  background:var(--bg3);border:none;cursor:pointer;
+  width:28px;height:28px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;color:var(--label2);
+}
+#chat-msgs{
+  flex:1;overflow-y:auto;padding:12px 16px;
+  display:flex;flex-direction:column;gap:10px;
+}
+.msg{max-width:85%;padding:10px 13px;border-radius:16px;font-size:14px;line-height:1.45}
+.msg-user{
+  background:var(--label);color:#fff;
+  align-self:flex-end;border-bottom-right-radius:4px;
+}
+.msg-ai{
+  background:var(--bg2);color:var(--label);
+  align-self:flex-start;border-bottom-left-radius:4px;
+  border:1px solid var(--sep);
+}
+.msg-ai.thinking{color:var(--label3);font-style:italic}
+#chat-key-wrap{
+  padding:12px 16px;border-top:1px solid var(--sep);flex-shrink:0;
+  background:var(--bg2);display:none;
+}
+#chat-form{
+  padding:10px 12px;border-top:1px solid var(--sep);flex-shrink:0;
+  display:flex;gap:8px;align-items:center;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom));
+}
+#chat-input{
+  flex:1;border:1px solid var(--sep);border-radius:20px;
+  padding:9px 14px;font-size:14px;outline:none;
+  font-family:-apple-system,system-ui,sans-serif;
+  background:var(--bg2);color:var(--label);
+}
+#chat-input:focus{border-color:var(--blue)}
+#chat-send{
+  width:36px;height:36px;border-radius:50%;border:none;
+  background:var(--label);color:#fff;
+  cursor:pointer;font-size:16px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+#chat-send:disabled{background:var(--bg4);cursor:default}
 </style>
+
 </head>
 <body>
 
@@ -731,9 +808,203 @@ function toggleOv(j){
   save();render();
 }
 
+
+
+// ─ CHAT ──────────────────────────────────────────────────────────────────────
+let chatOpen = false;
+let chatHistory = [];
+
+function toggleChat(){
+  chatOpen = !chatOpen;
+  document.getElementById("chat-panel").classList.toggle("open", chatOpen);
+  if(chatOpen){
+    checkApiKey();
+    if(chatHistory.length===0) addWelcome();
+    setTimeout(()=>document.getElementById("chat-input").focus(), 400);
+  }
+}
+
+function checkApiKey(){
+  const key = localStorage.getItem("ant_key")||"";
+  const wrap = document.getElementById("chat-key-wrap");
+  wrap.style.display = key ? "none" : "block";
+  document.getElementById("chat-form").style.display = key ? "flex" : "none";
+}
+
+function saveKey(){
+  const k = document.getElementById("api-key-input").value.trim();
+  if(!k) return;
+  localStorage.setItem("ant_key", k);
+  checkApiKey();
+  addWelcome();
+}
+
+function addWelcome(){
+  if(chatHistory.length>0) return;
+  const p=P();
+  const paidAmt=p.evs.reduce((s,e,j)=>s+(S.paid[`${S.pidx}-${j}`]?e.amt:0),0);
+  const extraAmt=S.extras.reduce((s,e)=>s+e.amt,0);
+  const ovPaidAmt=S.pidx===0?OVERDUE_EVENTS.reduce((s,ev,j)=>s+(S.ovPaid["ov-"+j]?ev.amt:0),0):0;
+  const balance=SALARY+(S.carry||0)-paidAmt-ovPaidAmt-extraAmt;
+  addMsg("ai", `Hola Rafael 👋 Soy tu asesor financiero. Conozco tu situación exacta:
+
+💰 Balance disponible: **${fmt(balance)}**
+📅 Quincena ${S.pidx+1} | Carry: ${fmt(S.carry||0)}
+💳 Deuda CC: ${fmt(TOTAL_CC)}
+🏦 Buffer acumulado: ${fmt(S.buf)}
+
+¿En qué te puedo ayudar?`);
+}
+
+function buildSystemPrompt(){
+  const p=P();
+  const paidAmt=p.evs.reduce((s,e,j)=>s+(S.paid[`${S.pidx}-${j}`]?e.amt:0),0);
+  const extraAmt=S.extras.reduce((s,e)=>s+e.amt,0);
+  const ovPaidAmt=S.pidx===0?OVERDUE_EVENTS.reduce((s,ev,j)=>s+(S.ovPaid["ov-"+j]?ev.amt:0),0):0;
+  const balance=SALARY+(S.carry||0)-paidAmt-ovPaidAmt-extraAmt;
+  const surplus=Math.max(0,balance-250);
+
+  return `Eres el asesor financiero personal de Rafael Benezra. Conoces su situación financiera exacta y respondes siempre en español, de forma directa y concisa (máximo 3-4 oraciones). Nunca uses markdown con asteriscos — usa texto plano.
+
+SITUACIÓN FINANCIERA ACTUAL:
+- Sueldo quincenal: $7,000 (biweekly)
+- Balance disponible HOY: ${fmt(balance)}
+- Surplus después de buffer: ${fmt(surplus)}
+- Carry-over de quincena anterior: ${fmt(S.carry||0)}
+- Quincena actual: ${S.pidx+1} de ${PERIODS.length}
+- Total obligaciones esta quincena: ${fmt(p.total)}
+- Pagado hasta ahora: ${fmt(paidAmt+ovPaidAmt)}
+- Gastos extras ingresados: ${fmt(extraAmt)}
+- Buffer acumulado (intocable): ${fmt(S.buf)}
+
+DEUDAS:
+- Tarjetas de crédito total: ${fmt(TOTAL_CC)}
+- Amex Platinum: $22,567 al 29.99% APR (más urgente — avalanche target)
+- SoFi Loan 1: $15,578 — termina Abr 2027, libera $1,481/mes
+- SoFi Loan 2: $10,484
+- IRS Payment Plan: $4,500 restante, $500/mes
+
+REGLAS IMPORTANTES:
+- El buffer de $250/quincena es INTOCABLE — nunca recomendar usarlo
+- Si el surplus es < $100, recomendar cautela
+- Si es un gasto de comida/entretenimiento < $30, aprobar si hay surplus
+- Si es > $50, analizar impacto en el avalanche de Amex
+- Siempre mencionar el impacto en el avalanche si es relevante
+- Rafael está ejecutando estrategia de avalanche: todo surplus va a Amex (29.99%)`;
+}
+
+function addMsg(role, text){
+  const msgs = document.getElementById("chat-msgs");
+  const div = document.createElement("div");
+  div.className = `msg msg-${role}`;
+  // Simple formatting: bold **text** → <strong>text</strong>, newlines
+  div.innerHTML = text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/
+/g, '<br>');
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  if(role==="user") chatHistory.push({role:"user",content:text});
+  else if(role==="ai") chatHistory.push({role:"assistant",content:text});
+  return div;
+}
+
+async function sendMsg(){
+  const input = document.getElementById("chat-input");
+  const btn   = document.getElementById("chat-send");
+  const text  = input.value.trim();
+  if(!text) return;
+
+  const key = localStorage.getItem("ant_key")||"";
+  if(!key){ checkApiKey(); return; }
+
+  input.value="";
+  btn.disabled=true;
+  addMsg("user", text);
+
+  // Thinking indicator
+  const msgs=document.getElementById("chat-msgs");
+  const thinking=document.createElement("div");
+  thinking.className="msg msg-ai thinking";
+  thinking.textContent="Analizando tu situación...";
+  msgs.appendChild(thinking);
+  msgs.scrollTop=msgs.scrollHeight;
+
+  try {
+    const messages = chatHistory.filter(m=>m.role!=="assistant"||chatHistory.indexOf(m)>chatHistory.length-10);
+    const res = await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "x-api-key": key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model:"claude-sonnet-4-20250514",
+        max_tokens:400,
+        system: buildSystemPrompt(),
+        messages: messages
+      })
+    });
+
+    thinking.remove();
+
+    if(!res.ok){
+      const err=await res.json();
+      if(err.error?.type==="authentication_error"){
+        localStorage.removeItem("ant_key");
+        checkApiKey();
+        addMsg("ai","❌ API key inválida. Por favor ingresa una nueva.");
+      } else {
+        addMsg("ai",`❌ Error: ${err.error?.message||"desconocido"}`);
+      }
+    } else {
+      const data=await res.json();
+      const reply=data.content[0]?.text||"Sin respuesta";
+      addMsg("ai",reply);
+    }
+  } catch(e){
+    thinking.remove();
+    addMsg("ai","❌ Error de conexión. Verifica tu internet.");
+  }
+  btn.disabled=false;
+  input.focus();
+}
+
 ["ex-n","ex-a"].forEach(id=>document.getElementById(id).addEventListener("keydown",e=>{if(e.key==="Enter")addExtra();}));
 document.getElementById("bonus").addEventListener("keydown",e=>{if(e.key==="Enter")calcBonus();});
 render();
 </script>
+
+<!-- CHAT FAB -->
+<button id="chat-fab" onclick="toggleChat()">💬</button>
+
+<!-- CHAT PANEL -->
+<div id="chat-panel">
+  <div id="chat-drag"></div>
+  <div id="chat-head">
+    <div id="chat-title">🤖 Asesor Financiero</div>
+    <button id="chat-close" onclick="toggleChat()">✕</button>
+  </div>
+
+  <!-- API Key prompt (shows only if no key saved) -->
+  <div id="chat-key-wrap">
+    <div style="font-size:13px;color:var(--label2);margin-bottom:8px">Ingresa tu API key de Anthropic (se guarda localmente, nunca se envía a servidores):</div>
+    <div style="display:flex;gap:8px">
+      <input id="api-key-input" type="password" placeholder="sk-ant-..." style="flex:1;border:1px solid var(--sep);border-radius:8px;padding:8px 10px;font-size:13px;outline:none;background:var(--bg);color:var(--label)"/>
+      <button onclick="saveKey()" style="padding:8px 14px;border-radius:8px;border:none;background:var(--label);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Guardar</button>
+    </div>
+    <div style="font-size:11px;color:var(--label3);margin-top:6px">Obtén una en console.anthropic.com</div>
+  </div>
+
+  <div id="chat-msgs"></div>
+
+  <div id="chat-form">
+    <input id="chat-input" placeholder="¿Me puedo permitir pizza hoy?" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"/>
+    <button id="chat-send" onclick="sendMsg()">↑</button>
+  </div>
+</div>
+
 </body>
 </html>
