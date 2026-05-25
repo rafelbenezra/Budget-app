@@ -298,10 +298,10 @@ body{
 <div id="post-debt"></div>
 
 <script>
-const SALARY=7000,BUF=250,START="2026-05-21",CYCLE_START="2026-05-29";
+const SALARY=7000,BUF=250,CYCLE_START="2026-05-29";
 const fmt=n=>new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",minimumFractionDigits:2}).format(n);
 const fmtS=d=>new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
-function genPD(n=30){const r=[],s=new Date(START+"T12:00:00");for(let i=0;i<n;i++){const d=new Date(s);d.setDate(d.getDate()+i*14);r.push(d.toISOString().slice(0,10));}return r;}
+function genPD(n=30){const r=[],s=new Date(CYCLE_START+"T12:00:00");for(let i=0;i<n;i++){const d=new Date(s);d.setDate(d.getDate()+i*14);r.push(d.toISOString().slice(0,10));}return r;}
 const PD=genPD();
 function bPd(due){let b=PD[0];for(const p of PD){if(p<=due)b=p;else break;}return b;}
 function addMo(ds){const[y,m,d]=ds.split("-").map(Number);const nm=m%12+1,ny=m===12?y+1:y;return`${ny}-${String(nm).padStart(2,"0")}-${String(Math.min(d,new Date(ny,nm,0).getDate())).padStart(2,"0")}`;}
@@ -395,7 +395,9 @@ function render(){
   const p=P();
   const paidAmt=p.evs.reduce((s,e,j)=>s+(S.paid[`${S.pidx}-${j}`]?e.amt:0),0);
   const extraAmt=S.extras.reduce((s,e)=>s+e.amt,0);
-  const balance=SALARY+(S.carry||0)-paidAmt-extraAmt;
+  // Overdue items (May 21-28) also deduct from balance when marked paid (only in period 0)
+  const ovPaidAmt=S.pidx===0?OVERDUE_EVENTS.reduce((s,ev,j)=>s+(S.ovPaid["ov-"+j]?ev.amt:0),0):0;
+  const balance=SALARY+(S.carry||0)-paidAmt-ovPaidAmt-extraAmt;
 
   const pd=new Date(p.pd+"T12:00:00");
   const nPd=PERIODS[S.pidx+1];
@@ -404,7 +406,7 @@ function render(){
   const bv=document.getElementById("balance-val");
   bv.textContent=fmt(balance);
   bv.style.color=balance<0?"var(--red)":balance<BUF?"var(--orange)":"var(--green)";
-  document.getElementById("s-paid").textContent=fmt(paidAmt);
+  document.getElementById("s-paid").textContent=fmt(paidAmt+ovPaidAmt);
   document.getElementById("s-extra").textContent=fmt(extraAmt);
   document.getElementById("s-buf").textContent=fmt(S.buf);
   document.getElementById("s-carry").textContent=fmt(S.carry||0);
@@ -717,7 +719,7 @@ function renderOverdue(){
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         <span class="mono" style="font-size:13px;font-weight:600;color:${isPaid?"var(--label3)":ev.urgent?"var(--red)":"var(--label2)"}">-${fmt(ev.amt)}</span>
-        ${ev.urgent?`<button class="t-check${isPaid?" done":""}" onclick="toggleOv(${j})">${isPaid?"✓":"○"}</button>`:'<span style="font-size:10px;color:var(--label3)">auto</span>'}
+        <button class="t-check${isPaid?" done":""}" onclick="toggleOv(${j})">${isPaid?"✓":"○"}</button>
       </div>
     </div>`;
   }).join("");
