@@ -280,6 +280,17 @@ input,button{font-family:-apple-system,system-ui,sans-serif}
     </div>
     <button onclick="toggleChat()" style="width:28px;height:28px;border-radius:50%;background:var(--bg3);border:none;cursor:pointer;color:var(--lbl2);font-size:13px">✕</button>
   </div>
+  <!-- API Key setup (shows only once) -->
+  <div id="ckey-wrap" style="display:none;padding:12px 14px;background:var(--bg2);border-bottom:1px solid var(--sep);flex-shrink:0">
+    <div style="font-size:13px;font-weight:600;color:var(--lbl);margin-bottom:4px">Conecta con Claude AI</div>
+    <div style="font-size:11px;color:var(--lbl2);margin-bottom:8px">Ingresa tu API key de Anthropic — se guarda solo en este dispositivo, nunca se comparte.</div>
+    <div style="display:flex;gap:7px">
+      <input id="ckey-inp" type="password" placeholder="sk-ant-..." style="flex:1;background:var(--bg);border:1px solid var(--sep);border-radius:8px;padding:8px 10px;font-size:12px;font-family:'SF Mono','Menlo',monospace;outline:none;color:var(--lbl)"/>
+      <button onclick="saveApiKey()" style="padding:8px 14px;border-radius:8px;border:none;background:var(--lbl);color:#fff;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">Guardar</button>
+    </div>
+    <div style="font-size:10px;color:var(--lbl3);margin-top:5px">Obtén una gratis en <b>console.anthropic.com</b> → API Keys</div>
+  </div>
+
   <div id="cmsgs"></div>
   <div class="csugg">
     <button class="cs" onclick="quickQ('cuanto tengo')">💰 Balance</button>
@@ -919,30 +930,72 @@ function resetAll(){
 // CHAT
 var chatOpen=false;
 var chatCtx={intent:null,amt:null,lastQ:""};
+var chatHistory=[];
+
+function buildSystemPrompt(){
+  var p=P();
+  var bal=getBal();
+  var rs=getRealSurplus();
+  var extAmt=S.extras.reduce(function(s,e){return s+e.amt;},0);
+  return "Eres el asesor financiero personal de Rafael Benezra. Responde SIEMPRE en español, directo y conciso (máximo 4 oraciones). Sin markdown, sin asteriscos, solo texto plano.\n\n"+
+    "SITUACIÓN FINANCIERA ACTUAL:\n"+
+    "- Balance disponible: "+fmt(bal)+"\n"+
+    "- Surplus real (después de pagar todo): "+fmt(rs)+"\n"+
+    "- Carry de quincena anterior: "+fmt(S.carry||0)+"\n"+
+    "- Buffer acumulado intocable: "+fmt(S.buf)+"\n"+
+    "- Quincena "+(S.pidx+1)+" de "+PERIODS.length+", total obligaciones: "+fmt(p.total)+"\n"+
+    "- Deuda CC total: "+fmt(TOTAL_CC)+" (Amex $22,567 al 29.99% es el target avalanche)\n"+
+    "- SoFi Loan 1 termina Abr 2027 libera $1,481/mes\n"+
+    "- IRS Payment Plan $4,500 restante a $500/mes\n"+
+    "- DTI actual: 52% — loans negados por Upgrade y Upstart\n\n"+
+    "REGLAS:\n"+
+    "- Buffer de $250/quincena es INTOCABLE\n"+
+    "- Todo surplus va a Amex (avalanche)\n"+
+    "- Cuando alguien menciona un gasto, di si puede permitírselo con el surplus real\n"+
+    "- Si piden agregar un gasto al tracker, responde con: AGREGAR:[nombre]:[monto] en la primera línea\n"+
+    "- Sé honesto aunque la respuesta no sea la que quieren escuchar";
+}
 
 function toggleChat(){
   chatOpen=!chatOpen;
   document.getElementById("cpanel").classList.toggle("open",chatOpen);
-  if(chatOpen&&document.getElementById("cmsgs").children.length===0)showWelcome();
-  if(chatOpen)setTimeout(function(){document.getElementById("cinp").focus();},350);
+  if(chatOpen){
+    var key=checkApiKey();
+    if(key&&document.getElementById("cmsgs").children.length===0)showWelcome();
+    if(key)setTimeout(function(){document.getElementById("cinp").focus();},350);
+  }
 }
 
 function showWelcome(){
   var bal=getBal();
   var rs=getRealSurplus();
-  addAiMsg("Hola Rafael!<br><br>"+
-    "<b>Balance actual:</b> "+fmt(bal)+"<br>"+
-    "<b>Surplus real (despues de pagar todo):</b> "+fmt(rs)+"<br>"+
-    "<b>Deuda CC:</b> "+fmt(TOTAL_CC)+"<br>"+
-    "<b>Buffer:</b> "+fmt(S.buf)+"<br><br>"+
-    "Preguntame lo que necesites.");
+  addAiMsg("Hola Rafael! Soy tu asesor financiero con IA real.<br><br>"+
+    "<b>Balance:</b> "+fmt(bal)+"<br>"+
+    "<b>Surplus disponible:</b> "+fmt(rs)+"<br>"+
+    "<b>Deuda CC:</b> "+fmt(TOTAL_CC)+"<br><br>"+
+    "Preguntame cualquier cosa — también puedo agregar gastos al tracker directamente.");
 }
 
 function addAiMsg(html){
+  // Check for AGREGAR command from Claude
+  var lines=html.split("\n");
+  var firstLine=lines[0].trim();
+  if(firstLine.indexOf("AGREGAR:")==0){
+    var parts=firstLine.split(":");
+    if(parts.length>=3){
+      var expName=parts[1].trim();
+      var expAmt=parseFloat(parts[2].trim());
+      if(expName&&!isNaN(expAmt)&&expAmt>0){
+        addExtraDirectly(expName,expAmt);
+        html=lines.slice(1).join("\n").trim();
+        if(!html)html="Listo, agregue "+expName+" por "+fmt(expAmt)+" al tracker. Tu balance se actualizo.";
+      }
+    }
+  }
   var msgs=document.getElementById("cmsgs");
   var div=document.createElement("div");
   div.className="msg ma";
-  div.innerHTML=html;
+  div.innerHTML=html.replace(/\n/g,"<br>");
   msgs.appendChild(div);
   msgs.scrollTop=msgs.scrollHeight;
 }
@@ -961,14 +1014,85 @@ function quickQ(q){
   sendChat();
 }
 
+function saveApiKey(){
+  var k=document.getElementById("ckey-inp").value.trim();
+  if(!k||k.length<20){alert("API key invalida");return;}
+  localStorage.setItem("ant_key_v2",k);
+  document.getElementById("ckey-wrap").style.display="none";
+  document.getElementById("cform").style.display="flex";
+  showWelcome();
+}
+
+function checkApiKey(){
+  var key=localStorage.getItem("ant_key_v2")||"";
+  var hasKey=key.length>20;
+  document.getElementById("ckey-wrap").style.display=hasKey?"none":"block";
+  document.getElementById("cform").style.display=hasKey?"flex":"none";
+  return key;
+}
+
 function sendChat(){
   var inp=document.getElementById("cinp");
+  var btn=document.getElementById("csnd");
   var q=inp.value.trim();
   if(!q)return;
+  var key=localStorage.getItem("ant_key_v2")||"";
+  if(!key){checkApiKey();return;}
   inp.value="";
+  btn.disabled=true;
   addUserMsg(q);
-  var resp=advisor(q,chatCtx);
-  setTimeout(function(){addAiMsg(resp);},300);
+  chatHistory.push({role:"user",content:q});
+
+  // Typing indicator
+  var msgs=document.getElementById("cmsgs");
+  var tk=document.createElement("div");
+  tk.className="msg ma";
+  tk.id="tk-ind";
+  tk.innerHTML="<span style='color:var(--lbl3);font-style:italic'>Pensando...</span>";
+  msgs.appendChild(tk);
+  msgs.scrollTop=msgs.scrollHeight;
+
+  fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key":key,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
+    body:JSON.stringify({
+      model:"claude-sonnet-4-20250514",
+      max_tokens:400,
+      system:buildSystemPrompt(),
+      messages:chatHistory.slice(-8)
+    })
+  })
+  .then(function(r){return r.json();})
+  .then(function(data){
+    var t=document.getElementById("tk-ind");
+    if(t)t.remove();
+    if(data.error){
+      if(data.error.type==="authentication_error"){
+        localStorage.removeItem("ant_key_v2");
+        checkApiKey();
+        addAiMsg("API key invalida. Por favor ingresa una nueva.");
+      } else {
+        addAiMsg("Error: "+( data.error.message||"desconocido"));
+      }
+    } else {
+      var reply=data.content&&data.content[0]?data.content[0].text:"Sin respuesta";
+      chatHistory.push({role:"assistant",content:reply});
+      addAiMsg(reply);
+    }
+    btn.disabled=false;
+    inp.focus();
+  })
+  .catch(function(){
+    var t=document.getElementById("tk-ind");
+    if(t)t.remove();
+    addAiMsg("Error de conexion. Verifica tu internet.");
+    btn.disabled=false;
+  });
 }
 
 function advisor(q, ctx){
